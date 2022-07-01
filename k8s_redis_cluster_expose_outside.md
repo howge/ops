@@ -1,8 +1,8 @@
 ## k8s(v1.23) 部署redis集群，借助redis-cluster-proxy 暴露服务到集群外部
 > 安装nfs server和客户端工具
 ```console
-# yum install nfs
-# yum install nfs-utils -y
+# yum install nfs-utils -y # 集群内部节点都需要安装，不然容器启动报错
+# systemctl enable rpcbind
 # vim  /etc/exports # 
 
 /data/redis/redis-cluster0     10.0.0.0/24(rw,sync,no_root_squash,no_all_squash)
