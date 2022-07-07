@@ -633,6 +633,94 @@ kubectl create clusterrolebinding kubelet-bootstrap \
  ```
 
  > kube-proxy部署
+ ```console
+ #生成配置文件
+ cat > /opt/kubernetes/cfg/kube-proxy.conf << EOF
+KUBE_PROXY_OPTS="--logtostderr=false \\
+--v=2 \\
+--log-dir=/opt/kubernetes/logs \\
+--config=/opt/kubernetes/cfg/kube-proxy-config.yml"
+EOF
+#kube-proxy-config.yml文件
+cat > /opt/kubernetes/cfg/kube-proxy-config.yml << EOF
+kind: KubeProxyConfiguration
+apiVersion: kubeproxy.config.k8s.io/v1alpha1
+bindAddress: 172.17.27.18
+metricsBindAddress: 172.17.27.18:10249
+healthzBindAddress: 172.17.27.18:10256
+clientConnection:
+  kubeconfig: /opt/kubernetes/cfg/kube-proxy.kubeconfig
+hostnameOverride: k8s-node-01
+clusterCIDR: 10.244.0.0/16
+mode: "ipvs"
+EOF
+#生成kube-proxy证书
+cd ~/TLS/k8s
+cat > kube-proxy-csr.json << EOF
+{
+  "CN": "system:kube-proxy",
+  "hosts": [],
+  "key": {
+    "algo": "rsa",
+    "size": 2048
+  },
+  "names": [
+    {
+      "C": "CN",
+      "L": "Hubei",
+      "ST": "Wuhan",
+      "O": "k8s",
+      "OU": "System"
+    }
+  ]
+}
+EOF
+
+cfssl gencert -ca=ca.pem -ca-key=ca-key.pem -config=ca-config.json -profile=kubernetes kube-proxy-csr.json | cfssljson -bare kube-proxy
+#生成kubeconfig文件
+KUBE_CONFIG="/opt/kubernetes/cfg/kube-proxy.kubeconfig"
+KUBE_APISERVER="https://172.17.27.17:6443"
+
+kubectl config set-cluster kubernetes \
+  --certificate-authority=/opt/kubernetes/ssl/ca.pem \
+  --embed-certs=true \
+  --server=${KUBE_APISERVER} \
+  --kubeconfig=${KUBE_CONFIG}
+
+kubectl config set-credentials kube-proxy \
+  --client-certificate=./kube-proxy.pem \
+  --client-key=./kube-proxy-key.pem \
+  --embed-certs=true \
+  --kubeconfig=${KUBE_CONFIG}
+
+kubectl config set-context default \
+  --cluster=kubernetes \
+  --user=kube-proxy \
+  --kubeconfig=${KUBE_CONFIG}
+
+kubectl config use-context default --kubeconfig=${KUBE_CONFIG}
+
+#systemd管理kube-proxy
+cat > /usr/lib/systemd/system/kube-proxy.service << EOF
+[Unit]
+Description=Kubernetes Proxy
+After=network.target
+
+[Service]
+EnvironmentFile=/opt/kubernetes/cfg/kube-proxy.conf
+ExecStart=/usr/local/bin/kube-proxy \$KUBE_PROXY_OPTS
+Restart=on-failure
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+#服务三连
+systemctl daemon-reload
+systemctl start kube-proxy
+systemctl enable kube-proxy
+ ```
  
  > kubelet 部署
 
@@ -699,7 +787,121 @@ LimitNOFILE=65536
 [Install]
 WantedBy=multi-user.target
 EOF
+#服务三连
+systemctl daemon-reload
+systemctl start kubelet
+systemctl enable kubelet
+
+#批准kubelet证书申请并加入集群
+#查看kubelet证书请求
+kubectl get csr
+NAME                                                   AGE   SIGNERNAME                                    REQUESTOR           CONDITION
+node-csr-jaqXhwxFBnD-1ui9omPdF__0SGovk2ZRhszz_QMGJxI   62s   kubernetes.io/kube-apiserver-client-kubelet   kubelet-bootstrap   Pending
+#批准申请
+kubectl certificate approve node-csr-jaqXhwxFBnD-1ui9omPdF__0SGovk2ZRhszz_QMGJxI
+#查看节点（由于网络插件还没有部署，节点会没有准备就绪 NotReady）
+kubectl get node
+NAME          STATUS     ROLES    AGE   VERSION
+k8s-node-01   NotReady   <none>   7s    v1.23.6
 ```
- 
+>kubectl 权限授予
+```console
+cd ~
+cat > apiserver-to-kubelet-rbac.yaml << EOF
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  annotations:
+    rbac.authorization.kubernetes.io/autoupdate: "true"
+  labels:
+    kubernetes.io/bootstrapping: rbac-defaults
+  name: system:kube-apiserver-to-kubelet
+rules:
+  - apiGroups:
+      - ""
+    resources:
+      - nodes/proxy
+      - nodes/stats
+      - nodes/log
+      - nodes/spec
+      - nodes/metrics
+      - pods/log
+    verbs:
+      - "*"
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: system:kube-apiserver
+  namespace: ""
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: system:kube-apiserver-to-kubelet
+subjects:
+  - apiGroup: rbac.authorization.k8s.io
+    kind: User
+    name: kubernetes
+EOF
+kubectl apply -f apiserver-to-kubelet-rbac.yaml
+```
+>部署calico网络组件
++安装
+```console
+kubectl apply -f  calico.yaml
+```
++查看
+```console
+kubectl get pods -n kube-system
+NAME                                       READY   STATUS    RESTARTS   AGE
+calico-kube-controllers-5cdd5b4947-7pn8k   1/1     Running   0          19h
+calico-node-8g6mh                          1/1     Running   0          19h
+calico-node-bbwgx                          1/1     Running   0          19h
+calico-node-hzkpt                          1/1     Running   0          19h
+coredns-66d5dc5c47-rwhwt                   1/1     Running   0          19h
+```
++错误排查
+```console
+kubectl describe pod calico-node-hzkpt -n kube-system
+kubectl logs -f calico-node-hzkpt -n kube-system
+```
+>部署coredns
++安装
+```console
+kubectl apply -f coredns.yaml
+```
++查看
+```console
+kubectl describe pod coredns-66d5dc5c47-rwhwt -n kube-system
+```
++验证
+```console
+[root@k8s-master ~]# kubectl run -it --rm dns-test --image=busybox:1.28.4 sh
+If you don't see a command prompt, try pressing enter.
+/ # ping www.baidu.com
+PING www.baidu.com (45.113.192.102): 56 data bytes
+64 bytes from 45.113.192.102: seq=0 ttl=56 time=0.909 ms
+^C
+--- www.baidu.com ping statistics ---
+1 packets transmitted, 1 packets received, 0% packet loss
+round-trip min/avg/max = 0.909/0.909/0.909 ms
+/ # ping kubernetes.default
+PING kubernetes.default (10.0.0.1): 56 data bytes
+64 bytes from 10.0.0.1: seq=0 ttl=64 time=0.049 ms
+64 bytes from 10.0.0.1: seq=1 ttl=64 time=0.089 ms
+^C
+--- kubernetes.default ping statistics ---
+2 packets transmitted, 2 packets received, 0% packet loss
+round-trip min/avg/max = 0.049/0.069/0.089 ms
+/ # ping apple-service.default
+PING apple-service.default (10.0.0.71): 56 data bytes
+64 bytes from 10.0.0.71: seq=0 ttl=64 time=0.049 ms
+^C
+--- apple-service.default ping statistics ---
+1 packets transmitted, 1 packets received, 0% packet loss
+round-trip min/avg/max = 0.049/0.049/0.049 ms
+/ #exit
+
+```
 
   
