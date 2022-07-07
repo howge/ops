@@ -10,6 +10,13 @@
 
 ## 前期准备工作
 
++ 下载文件
+  - [calico](https://github.com/howge/ops/blob/main/calico.yaml)
+  - [coredns](https://github.com/howge/ops/blob/main/coredns.yaml)
+  - k8s二进制文件
+
+
+
 + 基础设置
   
   绑定/etc/hosts文件,增加如下配置
@@ -461,6 +468,7 @@
     EOF
 + 签名json
     ```console
+    cd ~/TLS/k8s
     cat > kube-controller-manager-csr.json << EOF
     {
       "CN": "system:kube-controller-manager",
@@ -568,6 +576,7 @@
     ```
 + 客户端工具安装
     ```console
+    cd ~/TLS/k8s
     cat > admin-csr.json <<EOF
     {
         "CN": "admin",
