@@ -806,6 +806,28 @@
  
 > kubelet 部署
 
++ kubeconfig文件生成(master执行，每台node节点都需此文件)
+    ```console
+    KUBE_CONFIG="/opt/kubernetes/cfg/bootstrap.kubeconfig"
+    KUBE_APISERVER="https://172.17.27.17:6443"
+    TOKEN="c47ffb939f5ca36231d9e3121a252940" # 与token.csv里保持一致
+
+    # 生成 kubelet bootstrap kubeconfig 配置文件
+    kubectl config set-cluster kubernetes \
+    --certificate-authority=/opt/kubernetes/ssl/ca.pem \
+    --embed-certs=true \
+    --server=${KUBE_APISERVER} \
+    --kubeconfig=${KUBE_CONFIG}
+    kubectl config set-credentials "kubelet-bootstrap" \
+    --token=${TOKEN} \
+    --kubeconfig=${KUBE_CONFIG}
+    kubectl config set-context default \
+    --cluster=kubernetes \
+    --user="kubelet-bootstrap" \
+    --kubeconfig=${KUBE_CONFIG}
+    kubectl config use-context default --kubeconfig=${KUBE_CONFIG}
+    ```
+
 + 生成配置文件(centos8 注意--resolv-conf配制)
     ```console
     cat > /opt/kubernetes/cfg/kubelet.conf << EOF
