@@ -416,7 +416,7 @@
 
     [Service]
     EnvironmentFile=/opt/kubernetes/cfg/kube-apiserver.conf
-    ExecStart=/usr/local/bin/kube-apiserver $KUBE_APISERVER_OPTS
+    ExecStart=/usr/local/bin/kube-apiserver \$KUBE_APISERVER_OPTS
     Restart=on-failure
 
     [Install]
